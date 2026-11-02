@@ -1,0 +1,447 @@
+#!/bin/bash
+
+# ==========================================
+# L56 - WEATHER DATA ANALYZER
+# Complete Online Linux Project
+# ==========================================
+
+mkdir -p ~/linux_project/weatherscope
+cd ~/linux_project/weatherscope || exit 1
+
+mkdir -p lib data reports backups logs
+
+# ==========================================
+# STEP 1: CREATE WEATHER CSV WITH 90 RECORDS
+# ==========================================
+
+cat > data/weather.csv <<'EOF'
+date,city,temp,humidity,rain_mm
+EOF
+
+for day in $(seq 1 30); do
+    date="2026-10-$(printf '%02d' "$day")"
+
+    for city in Ahmedabad Mumbai Delhi; do
+
+        case "$city" in
+            Ahmedabad)
+                temp=$((32 + day % 8))
+                humidity=$((40 + day % 15))
+                ;;
+            Mumbai)
+                temp=$((28 + day % 7))
+                humidity=$((70 + day % 20))
+                ;;
+            Delhi)
+                temp=$((29 + day % 9))
+                humidity=$((35 + day % 20))
+                ;;
+        esac
+
+        rain=0
+
+        if [ "$city" = "Mumbai" ] && [ $((day % 4)) -eq 0 ]; then
+            rain=12
+        fi
+
+        if [ "$city" = "Delhi" ] && [ $((day % 7)) -eq 0 ]; then
+            rain=5
+        fi
+
+        echo "$date,$city,$temp,$humidity,$rain" \
+            >> data/weather.csv
+    done
+done
+
+touch logs/activity.log
+
+# ==========================================
+# STEP 2: CREATE FUNCTIONS
+# ==========================================
+
+cat > lib/functions.sh <<'EOF'
+#!/bin/bash
+
+DATA="data/weather.csv"
+LOG="logs/activity.log"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | $*" >> "$LOG"
+}
+
+check_data() {
+    if [ ! -f "$DATA" ]; then
+        echo "Weather data file not found!"
+        return 1
+    fi
+}
+
+show_help() {
+    echo "Weather Data Analyzer"
+    echo "Usage:"
+    echo "./main.sh       - Open menu"
+    echo "./main.sh --help"
+    echo "./main.sh --backup"
+    echo "./main.sh --cron"
+}
+
+# FEATURE 1: AVERAGE TEMPERATURE
+
+feature_1() {
+    check_data || return
+
+    echo
+    echo "CITY-WISE AVERAGE TEMPERATURE"
+
+    awk -F',' '
+    NR>1 {
+        sum[$2]+=$3
+        count[$2]++
+    }
+    END {
+        for(city in sum)
+            printf "%-12s %.2f C (%d records)\n",
+            city,sum[city]/count[city],count[city]
+    }' "$DATA" | sort
+
+    log "Average temperature checked"
+}
+
+# FEATURE 2: HOTTEST AND COLDEST DAY
+
+feature_2() {
+    check_data || return
+
+    echo
+    echo "HOTTEST DAY"
+
+    tail -n +2 "$DATA" |
+        sort -t',' -k3,3nr |
+        head -n 1
+
+    echo
+    echo "COLDEST DAY"
+
+    tail -n +2 "$DATA" |
+        sort -t',' -k3,3n |
+        head -n 1
+
+    log "Hottest and coldest records checked"
+}
+
+# FEATURE 3: RAINY DAYS PER CITY
+
+feature_3() {
+    check_data || return
+
+    echo
+    echo "RAINY RECORDS PER CITY"
+
+    awk -F',' '
+    NR>1 && $5>0 {
+        rainy[$2]++
+    }
+    END {
+        for(city in rainy)
+            printf "%-12s %d rainy records\n",
+            city,rainy[city]
+    }' "$DATA" | sort
+
+    log "Rainfall checked"
+}
+
+# FEATURE 4: MONTHLY SUMMARY
+
+feature_4() {
+    check_data || return
+
+    echo
+    echo "MONTHLY WEATHER SUMMARY"
+
+    awk -F',' '
+    NR>1 {
+        month=substr($1,1,7)
+        key=month "," $2
+
+        temp[key]+=$3
+        humidity[key]+=$4
+        rain[key]+=$5
+        count[key]++
+    }
+    END {
+        for(key in count) {
+            split(key,a,",")
+            printf "%s | %s | Avg temp: %.2f C | Avg humidity: %.2f%% | Rain: %.1f mm | Records: %d\n",
+            a[1],a[2],temp[key]/count[key],
+            humidity[key]/count[key],rain[key],count[key]
+        }
+    }' "$DATA" | sort
+
+    log "Monthly summary generated"
+}
+
+# FEATURE 5: GENERATE WEATHER REPORT
+
+feature_5() {
+    check_data || return
+
+    mkdir -p reports
+
+    out="reports/weather_report_$(date +%Y-%m-%d_%H%M%S).txt"
+
+    {
+        echo "=================================="
+        echo "       WEATHER DATA REPORT"
+        echo "=================================="
+        echo "Generated: $(date)"
+        echo
+        echo "CITY-WISE AVERAGE TEMPERATURE"
+
+        awk -F',' '
+        NR>1 {
+            sum[$2]+=$3
+            count[$2]++
+        }
+        END {
+            for(city in sum)
+                printf "%s: %.2f C\n",
+                city,sum[city]/count[city]
+        }' "$DATA" | sort
+
+        echo
+        echo "WEATHER RECORDS"
+
+        tail -n +2 "$DATA" | sort -t',' -k1,1
+
+    } > "$out"
+
+    echo "Report created: $out"
+
+    log "Weather report generated"
+}
+
+# VIEW WEATHER DATA
+
+view_data() {
+    check_data || return
+
+    echo
+    echo "WEATHER CSV DATA"
+
+    head -n 20 "$DATA"
+
+    echo
+    echo "Total data records:"
+
+    tail -n +2 "$DATA" | wc -l
+}
+
+# CREATE BACKUP
+
+do_backup() {
+    mkdir -p backups
+
+    file="backups/weather_$(date +%Y%m%d_%H%M%S).tar.gz"
+
+    tar -czf "$file" data/
+
+    echo "Backup created: $file"
+
+    log "Backup created"
+}
+
+# VIEW LOG
+
+view_log() {
+    if [ -s "$LOG" ]; then
+        tail -n 15 "$LOG"
+    else
+        echo "No activity recorded yet."
+    fi
+}
+
+# CRONTAB TASK
+
+cron_task() {
+    check_data || return
+
+    yesterday=$(date -d yesterday '+%Y-%m-%d' 2>/dev/null)
+
+    mkdir -p reports
+
+    {
+        echo "Weather summary for $yesterday"
+
+        awk -F',' -v d="$yesterday" '
+        NR>1 && $1==d {
+            print "City:",$2,
+                  "Temperature:",$3 " C",
+                  "Humidity:",$4 "%",
+                  "Rain:",$5 " mm"
+            found=1
+        }
+        END {
+            if(!found)
+                print "No records available for yesterday."
+        }' "$DATA"
+
+        echo
+    } >> reports/weather_report.txt
+
+    echo "Yesterday's summary appended to reports/weather_report.txt"
+
+    log "Cron task executed"
+}
+EOF
+
+# ==========================================
+# STEP 3: CREATE MAIN MENU
+# ==========================================
+
+cat > main.sh <<'EOF'
+#!/bin/bash
+
+cd "$(dirname "$0")" || exit 1
+
+source lib/functions.sh
+
+case "$1" in
+    --help)
+        show_help
+        exit 0
+        ;;
+    --backup)
+        do_backup
+        exit 0
+        ;;
+    --cron)
+        cron_task
+        exit 0
+        ;;
+esac
+
+while true; do
+
+    echo
+    echo "=========================================="
+    echo "       WEATHER DATA ANALYZER"
+    echo "=========================================="
+    echo "1. City-wise average temperature"
+    echo "2. Hottest and coolest day"
+    echo "3. Rainy records per city"
+    echo "4. Monthly summary"
+    echo "5. Generate weather report"
+    echo "6. View weather data"
+    echo "7. Backup data"
+    echo "8. View activity log"
+    echo "9. Search city using grep"
+    echo "10. Display city column using cut"
+    echo "0. Exit"
+    echo "=========================================="
+
+    read -r -p "Enter your choice: " choice
+
+    case "$choice" in
+
+        1) feature_1 ;;
+
+        2) feature_2 ;;
+
+        3) feature_3 ;;
+
+        4) feature_4 ;;
+
+        5) feature_5 ;;
+
+        6) view_data ;;
+
+        7) do_backup ;;
+
+        8) view_log ;;
+
+        9)
+            read -r -p "Enter city name: " city
+            grep -i "$city" "$DATA" || echo "City not found."
+            log "City searched: $city"
+            ;;
+
+        10)
+            echo "City column:"
+            cut -d',' -f2 "$DATA" | sort -u
+            ;;
+
+        0)
+            echo "Project closed. Thank you!"
+            break
+            ;;
+
+        *)
+            echo "Invalid choice. Try again."
+            ;;
+
+    esac
+
+done
+EOF
+
+# ==========================================
+# STEP 4: CREATE README
+# ==========================================
+
+cat > README.md <<'EOF'
+# L56 - Weather Data Analyzer
+
+## Objective
+Analyze offline weather CSV data using Linux shell scripting.
+
+## Features
+1. City-wise average temperature
+2. Hottest and coldest day
+3. Rainy records per city
+4. Monthly summary
+5. Weather report generation
+6. CSV data viewing
+7. Backup creation
+8. Activity logging
+9. City search using grep
+10. Column extraction using cut
+
+## Commands
+awk, sort, grep, cut, head, tail, wc, tar, chmod, crontab.
+
+## Run
+chmod +x main.sh
+./main.sh
+EOF
+
+# ==========================================
+# STEP 5: SET PERMISSIONS
+# ==========================================
+
+chmod +x main.sh lib/functions.sh
+
+# ==========================================
+# STEP 6: VERIFY PROJECT
+# ==========================================
+
+echo
+echo "=========================================="
+echo "PROJECT CREATED SUCCESSFULLY!"
+echo "=========================================="
+
+echo
+echo "Project location:"
+pwd
+
+echo
+echo "Project structure:"
+ls -R
+
+echo
+echo "Weather records:"
+tail -n +2 data/weather.csv | wc -l
+
+echo
+echo "Starting Weather Data Analyzer..."
+
+./main.sh
